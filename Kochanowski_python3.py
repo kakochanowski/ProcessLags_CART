@@ -25,10 +25,15 @@ from sklearn.model_selection import KFold, cross_val_score, train_test_split
 from sklearn.metrics import accuracy_score
 import seaborn as sbn; sbn.set()
 # Regularized Regression
-from sklearn.linear_model import LinearRegression, Ridge, RidgeCV, ElasticNet, Lasso, LassoCV
+from sklearn.linear_model import LinearRegression, Ridge, RidgeCV, ElasticNet
+from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import GridSearchCV
 # Decision Trees
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import DecisionTreeRegressor
+from sklearn import metrics
+from sklearn import tree
+import graphviz
+from sklearn.metrics import r2_score
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GridSearchCV
@@ -243,15 +248,12 @@ Review variables:
 """
 
 # Summary stats
-print(data_v1.describe())
-print(data_v1['Process_time_days'].mean())
-print(data_v1['Process_time_days'].median())
-print(data_v1['Process_time_days'].mode())
-print(data_v1['Process_time_days'].min())
-print(data_v1['Process_time_days'].max())
-
-# Save as csv
-data_v1.to_csv('data_v1.csv', index=False)
+# print(data_v1.describe())
+# print(data_v1['Process_time_days'].mean())
+# print(data_v1['Process_time_days'].median())
+# print(data_v1['Process_time_days'].mode())
+# print(data_v1['Process_time_days'].min())
+# print(data_v1['Process_time_days'].max())
 
 # Drop irrelevant variables
 data_v2 = data_v1.drop(['Issued Date', 'Filed Date', 'Issue Date', 'File Date', 'Permit Creation Date', 'Month Filed',
@@ -260,9 +262,11 @@ data_v2 = data_v1.drop(['Issued Date', 'Filed Date', 'Issue Date', 'File Date', 
                         'Permit Type Definition', 'Lot', 'Street Number', 'Unit', 'Unit Suffix',
                         'Existing Construction Type Description', 'Proposed Construction Type Description',
                         'Completed Date', 'TIDF Compliance', 'Description', 'Block',
-                        'Structural Notification', 'Process_time_days', 'Process_time_type',
-                        'Neighborhoods - Analysis Boundaries'], axis=1)
-
+                        'Structural Notification', 'Process_time_weeks', 'Process_time_type',
+                        'Neighborhoods - Analysis Boundaries', 'Existing Use', 'Proposed Use',
+                        'Existing Construction Type', 'Proposed Construction Type', 'Zipcode',
+                        'Fire Only Permit_B', 'Day of Week', 'Voluntary Soft-Story Retrofit V2',
+                        'Structural Notification Reported', 'Estimated Cost'], axis=1)
 
 # Excluding observations based on 'Current Status'
 data_v2.drop(data_v2[(data_v2['Current Status'] == 'cancelled') & (data_v2['Current Status'] == 'incomplete') &
@@ -270,26 +274,29 @@ data_v2.drop(data_v2[(data_v2['Current Status'] == 'cancelled') & (data_v2['Curr
 data_v2 = data_v2.drop(['Current Status'], axis=1)
 
 # Determine how to deal with remaining missing values
-sbn.heatmap(data_v2.isnull(),yticklabels=False,cbar=False,cmap='YlGnBu')
+# sbn.heatmap(data_v2.isnull(),yticklabels=False,cbar=False,cmap='YlGnBu')
 
 # Replacing NAs with median/feature given skewness
 column_avgs = (data_v2.median())
 column_avgs = column_avgs.astype(float).round()
 data_final = data_v2.fillna(column_avgs)
 
-# Save as csv
-data_final.to_csv('data_final.csv', index=False)
-
 
 """
 PART TWO: Prepare data for CART & regression
 """
-# Determine variable types
-print(data_final.dtypes)
 num_na = data_final.isna().sum()
 print(num_na)
-data_final.to_csv('data_final.csv', index=False)
-final = data_final.dropna()
+# Transform categorical variables to dummies
+final = (pd.get_dummies(data_final, columns=['Supervisor District', 'Quarter Filed', 'Permit Type', 'Year Filed'])).astype(int)
+final = final.dropna()
+# Determine variable types
+final['Rise Change'] = final['Rise Change'].astype(int)
+final['Stories Change'] = final['Stories Change'].astype(int)
+final['Stories Change'] = final['Stories Change'].astype(int)
+final['Process_time_days'] = final['Process_time_days'].astype(float)
+print(final.dtypes)
+
 # Save as csv
 final.to_csv('final.csv', index=False)
 
@@ -310,153 +317,92 @@ Visualize relationship between class and features
 """PART THREE"""
 #split cleaned data into test and train
 # Process time (weeks) produces an accuracy of ~65%. Going to use a binary label instead
-msk = np.random.rand(len(final)) < 0.80
+msk = np.random.rand(len(final)) < 0.70
 final_train = final[msk]
 final_test = final[~msk]
 # Training data
-xtrain = final_train.drop('Process_time_weeks', axis=1)
-ytrain = final_train.loc[:, 'Process_time_weeks']
+xtrain = final_train.drop('Process_time_days', axis=1)
+ytrain = final_train['Process_time_days']
 # Test data
-xtest = final_test.drop('Process_time_weeks', axis=1)
-ytest = final_test.loc[:, 'Process_time_weeks']
+xtest = final_test.drop('Process_time_days', axis=1)
+ytest = final_test['Process_time_days']
 
 # look at some simple statistics for process time of each feature
 fn = list(xtrain.columns)
+cn = ytrain
+cn = cn.unique()
 for feature in fn:
-    print(final_train[[feature, 'Process_time_weeks']].groupby([feature], as_index=False).agg(['mean', 'count', 'sum']))
+    print(final_train[[feature, 'Process_time_days']].groupby([feature], as_index=False).agg(['mean', 'count', 'sum']))
 
 # Tree Model
-tree = DecisionTreeClassifier(random_state=0)
-tree.fit(xtrain, ytrain)
+tree_1 = DecisionTreeRegressor(criterion = 'squared_error', max_depth=100, random_state=10)
+model = tree_1.fit(xtrain, ytrain)
+y_pred = model.predict(xtest)
 
 # compute accuracy in the test data
-print("Tree's accuracy on test set: {:.3f}".format(tree.score(xtest, ytest)))
+print("Mean Absolute Error:", metrics.mean_squared_error(ytest, y_pred))
 # plot_tree(tree, feature_names = fn, class_names = cn, filled = True)
 # plt.show()
-#
+dot_data = tree.export_graphviz(tree_1, feature_names=fn, class_names=sorted(cn), filled=True)
+graphviz.Source(dot_data)
 
-
-"""PRUNED TREE"""
-# Reduce df to sample size so CCP can run
-#split cleaned data into test and train
-sample_tree = final.sample(n=1000)
-sample_tree.shape
-#split cleaned data into test and train
-msk = np.random.rand(len(sample_tree)) < 0.80
-final_train_s = sample_tree[msk]
-final_test_s = sample_tree[~msk]
-# Training data
-xtrain_s = final_train_s.drop('Process_time_weeks', axis=1)
-ytrain_s = final_train_s.loc[:, 'Process_time_weeks']
-# Test data
-xtest_s = final_test_s.drop('Process_time_weeks', axis=1)
-ytest_s = final_test_s.loc[:, 'Process_time_weeks']
-
-# Tree Model
-tree_s = DecisionTreeClassifier(random_state=0)
-tree_s.fit(xtrain_s, ytrain_s)
-
-# compute accuracy in the test data
-print("Sample Tree's accuracy on test set: {:.3f}".format(tree_s.score(xtest_s, ytest_s)))
-# cn = ['Died', 'Survived']
-# plot_tree(tree, feature_names = fn, class_names = cn, filled = True)
-# plt.show()
-
-# now find the best alpha value with which to prune
-path = tree_s.cost_complexity_pruning_path(xtrain_s, ytrain_s)
-ccp_alphas, impurities = path.ccp_alphas, path.impurities
-clfs = []
-for alpha in ccp_alphas:
-    clf = DecisionTreeClassifier(random_state=0, ccp_alpha=alpha)
-    clf.fit(xtrain_s, ytrain_s)
-    clfs.append(clf)
-# drop the last model because that only has 1 node
-clfs = clfs[:-1]
-ccp_alphas = ccp_alphas[:-1]
-
-train_acc = []
-test_acc = []
-for c in clfs:
-    y_train_pred = c.predict(xtrain_s)
-    y_test_pred = c.predict(xtest_s)
-    train_acc.append(accuracy_score(y_train_pred, ytrain_s))
-    test_acc.append(accuracy_score(y_test_pred, ytest_s))
-
-# plot the changes in accuracy for each alpha
-plt.scatter(ccp_alphas, train_acc)
-plt.scatter(ccp_alphas, test_acc)
-plt.plot(ccp_alphas, train_acc, label = 'train_accuracy', drawstyle = "steps-post")
-plt.plot(ccp_alphas, test_acc, label = 'test_accuracy', drawstyle = "steps-post")
-plt.legend()
-plt.title('Accuracy vs alpha')
-plt.show()
-# the best outcome looks to be around 0.01
-
-# the pruned tree model
-# pruned_tree = DecisionTreeClassifier(random_state=0, ccp_alpha=0.01)
-# pruned_tree.fit(xtrain, ytrain)
-
-# compute accuracy in the test data
-# print("Pruned tree's accuracy on test set: {:.3f}".format(pruned_tree.score(x_test, y_test)))
-# plot_tree(pruned_tree, feature_names = fn, class_names = cn, filled = True)
-# plt.show()
-
-
-"""PART FOUR"""
-"""Regularized OLS"""
-# Transform categorical variables into dummies
-# Existing construction type, Proposed construction type, Supervisor District, Zipcode, Quarter Filed, Day of Week
-finalOLS = pd.get_dummies(final, columns=['Existing Construction Type', 'Proposed Construction Type',
-                                           'Supervisor District', 'Zipcode', 'Quarter Filed', 'Day of Week'])
-
-# Make sample (MemoryError otherwise)
-sample_OLS = finalOLS.sample(n=1000)
-sample_OLS.shape
-
-# Split data into test and train
-OLS_y = sample_OLS.Process_time_weeks
-OLS_x = sample_OLS.drop(['Process_time_weeks'], axis = 1).astype('float64')
-xtrain2, xtest2, ytrain2, ytest2 = train_test_split(OLS_x, OLS_y, test_size = 0.20, random_state=46)
-
+"""REGULARIZED REGRESSION"""
 # Baseline OLS model
 linreg = LinearRegression()
-model_simple = linreg.fit(xtrain2, ytrain2)
-y_pred2 = model_simple.predict(xtest2)
+model_simple = linreg.fit(xtrain, ytrain)
+y_pred2 = model_simple.predict(xtest)
 # Performance metric (mean squared error)
-ols_mse = np.sqrt(mean_squared_error(ytest2, y_pred2))
+ols_mse = np.sqrt(mean_squared_error(ytest, y_pred2))
 print(ols_mse)
 
 # Elastic net (accounts for interaction between features and highly non-linear decision boundaries)
-enet = ElasticNet(normalize=True)
-model_regular = enet.fit(xtrain2, ytrain2)
-# Estimate MSE
-y_pred3 = model_regular.predict(xtest2)
-enet_mse = np.sqrt(mean_squared_error(ytest2,y_pred3))
-print(enet_mse)
+# Must standardize variables before performing regression (coefficients are penalized)
+# Determine distribution of each feature
+final.columns = final.columns.astype(str) # Create string of column names
+for feature in final.columns:
+    x = np.array(final[feature])
+    plt.hist([feature])
+    plt.title("Distribution of " + feature)
+    plt.savefig("hist" + "_" + str(feature) + ".png")
+   # plt.show()
 
-# Tuning parameters
-# Set large range of lambdas (alpha)
-tuning_param = 10**np.linspace(10,-2,100)*0.5
-enet_params = {"l1_ratio": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-              "alpha":[tuning_param.all()]}
-enet_cv = GridSearchCV(model_regular, enet_params, cv = 10).fit(OLS_x, OLS_y)
-enet_cv.best_params_
+# Standardize variables and define model
+RidgeReg = make_pipeline(StandardScaler(with_mean=False), Ridge())
+# fit it to the training data
+model = RidgeReg.fit(xtrain, ytrain)
+# estimate the MSE on the test data
+y_pred4 = model.predict(xtest)
+ridge_mse = np.sqrt(mean_squared_error(ytest, y_pred4))
+print(ridge_mse)
+
+# now WITH tuning lambda (penalty term) for which we will try different values
+tuning_param = 10 ** np.linspace(10, -2, 100) * 0.5
+
+# determine the best via 10-fold cross validation
+ridreg_cv = RidgeCV(alphas=tuning_param, scoring="neg_mean_squared_error", cv=10, normalize=True)
+ridreg_cv.fit(xtrain, ytrain)
+ridreg_cv.alpha_
 
 # fit the final model with the optimal alpha
-# enet_tuned = ElasticNet(**enet_cv.best_params_).fit(X_train,y_train)
-# y_pred = enet_tuned.predict(X_test)
-# enet_mse_tuned = np.sqrt(mean_squared_error(y_test,y_pred))
-# enet_mse_tuned
-# see which coefficients were kept by ENet
-# pd.Series(enet_tuned.coef_, index = X.columns)
+ridreg_tuned = Ridge(alpha=ridreg_cv.alpha_).fit(xtrain, ytrain)
+y_pred5 = ridreg_tuned.predict(xtest)
+ridge_mse_tuned = np.sqrt(mean_squared_error(ytest, y_pred5))
+ridge_mse_tuned
 
+# if you want to visualize the evolution of coefficients over a large set of alphas
+# for each alpha, fit the ridge regression
+coefs = []
+for a in tuning_param:
+    ridreg.set_params(alpha=a)
+    ridreg.fit(X, y)
+    coefs.append(ridreg.coef_)
 
-"""PART FIVE"""
-"""Random Forest"""
-# Swarm intelligence and feature selection
+np.shape(coefs)
+# and plot the coefficients
+ax = plt.gca()
+ax.plot(tuning_param, coefs)
+ax.set_xscale('log')
+plt.xlabel('alpha')
+plt.ylabel('weights')
 
-# scale the features
-sc = StandardScaler()
-xtrain4 = sc.fit_transform(xtrain_s)
-ytrain4 = sc.transform(xtest_s)
 
